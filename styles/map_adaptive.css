@@ -1,0 +1,90 @@
+/* Адаптивные стили для страницы карты */
+@media (max-width: 1200px) {
+    .main {
+        width: 350px;
+    }
+}
+
+@media (max-width: 992px) {
+    .main {
+        width: 320px;
+    }
+}
+
+@media (max-width: 768px) {
+    .main {
+        position: fixed;
+        left: 10px;
+        right: 10px;
+        top: 80px;
+        bottom: 10px;
+        width: auto;
+        max-height: calc(100vh - 90px);
+    }
+
+    .header-inner {
+        padding: 10px 15px;
+    }
+
+    .header-logo {
+        width: 40px;
+        height: 40px;
+        font-size: 20px;
+    }
+
+    .header-title {
+        font-size: 16px;
+    }
+
+    .header-menu {
+        gap: 15px;
+    }
+
+    .header-link {
+        font-size: 14px;
+    }
+}
+
+@media (max-width: 480px) {
+    .main {
+        left: 5px;
+        right: 5px;
+        top: 70px;
+        bottom: 5px;
+        max-height: calc(100vh - 75px);
+    }
+
+    .header-inner {
+        padding: 8px 10px;
+    }
+
+    .header-logo {
+        width: 36px;
+        height: 36px;
+        font-size: 18px;
+    }
+
+    .header-title {
+        font-size: 14px;
+    }
+
+    .header-menu {
+        gap: 10px;
+    }
+
+    .header-link {
+        font-size: 13px;
+    }
+
+    .main-header {
+        padding: 12px 12px 8px 12px;
+    }
+
+    .main-title {
+        font-size: 16px;
+    }
+
+    .main-text {
+        font-size: 14px;
+    }
+}

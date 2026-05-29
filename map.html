@@ -31,6 +31,9 @@
 
     <!-- контейнер с картой -->
     <div id="map" style="height: 100vh;"></div>
+    <div id="info"
+        style="position:absolute;top:92px;left:24px;z-index:1100;padding:10px 14px;background:rgba(255,255,255,0.92);border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,0.16);font-size:14px;max-width:320px;line-height:1.4;color:#222;">
+    </div>
 
     <!-- боковая панель -->
     <aside class="main" id="sidebar">
@@ -98,40 +101,40 @@
     <script src="Voronoi.js"></script>
     <script>
         // Глобальные переменные
-        let map;
-        let mallGroup;
-        let obstacleLayer = null;
-        let obstaclesVisible = false;
-        let obstaclesLoaded = false;
-        let oblastLayer = null;               // слой для границы области
-        let oblastLoaded = false;            // флаг загрузки области
+        let map;                             // главный объект карты
+        let mallGroup;                       // группа слоёв с ТЦ
+        let obstacleLayer = null;            // слой препятствий (реки, парки, нельзя строить)
+        let obstaclesVisible = false;        // показаны ли препятствия сейчас
+        let obstaclesLoaded = false;         // загружены ли данные препятствий
+        let oblastLayer = null;              // слой для границы области
+        let oblastLoaded = false;            // загружена ли граница области
         let oblastGeo = null;                // raw geojson объекта области
-        let allMarkers = [];
-        let influenceLayer = null;          // слой для зон влияния
-        let volgograd_boundaries = null;   // административные границы Волгограда
-        let bordersLoaded = false;         // флаг загрузки границ
-        let placeMode = false;              // режим добавления нового ТЦ
+        let allMarkers = [];                 // массив всех маркеров на карте
+        let influenceLayer = null;           // слой для зон влияния ТЦ
+        let volgograd_boundaries = null;     // административные границы Волгограда
+        let bordersLoaded = false;           // загружены ли границы города
+        let placeMode = false;               // режим добавления нового ТЦ
 
-        let gridLayer = null;
-        let gridVisible = false;
-        let gridLoaded = false;
-        let gridPointsLayer = null;
-        let competitionLayer = null;
-        let competitionVisible = false;
-        let deadZoneLayer = null;
-        let deadZoneVisible = false;
-        let routeLayer = null;
-        let fromCoords = null;
-        let toCoords = null;
+        let gridLayer = null;                // слой гексагональной/квадратной сетки
+        let gridVisible = false;             // показана ли сетка
+        let gridLoaded = false;              // загружена ли сетка
+        let competitionLayer = null;         // слой тепловой карты конкуренции
+        let competitionVisible = false;      // показан ли слой конкуренции
+        let deadZoneLayer = null;            // слой мёртвых зон (не охвачены ТЦ)
+        let deadZoneVisible = false;         // показан ли слой мёртвых зон
+        let routeLayer = null;               // линия построенного маршрута
+        let fromCoords = null;               // координаты начальной точки маршрута
+        let toCoords = null;                 // координаты конечной точки маршрута
 
         // Вспомогательная функция для отображения сообщений (при удалении элемента возвращается в консоль)
         function setInfo(message) {
-            const el = document.getElementById('info');
-            if (el) {
-                el.innerHTML = message;
-            } else {
-                console.log(message);
-            }
+            // Временно отключаем всплывающие сообщения
+            // const el = document.getElementById('info');
+            // if (el) {
+            //     el.innerHTML = message;
+            // } else {
+            //     console.log(message);
+            // }
         }
 
         // Инициализация карты и создание маркеров
@@ -165,7 +168,7 @@
                 });
             }
 
-            // Создаём маркеры торговых центров из database.js
+            // Создаём маркеры торговых центров 
             if (window.shoppingCenters && window.shoppingCenters.length > 0) {
                 console.log('Загружено ТЦ:', window.shoppingCenters.length);
 
@@ -193,7 +196,6 @@
                 });
 
                 // Маркеры не показываем до выбора района
-                setInfo('Выберите район для отображения ТЦ');
             } else {
                 console.error('shoppingCenters не найден или пуст');
             }
@@ -302,6 +304,7 @@
 
             // обработчик клика карты для добавления нового ТЦ в режиме размещения
             map.on('click', onMapClickAddMall);
+            initGridSystem();
 
             // Обработчики для других кнопок
             document.getElementById('toggleInfluence')?.addEventListener('click', () => {
@@ -389,15 +392,12 @@
                                 }
                                 setInfo(infoText);
                             });
-
-                            // Не показываем всплывающую подсказку и не отображаем имя (Volga и др.)
-                            // layer.bindTooltip отключен по требованию
                         }
                     });
 
                     obstaclesLoaded = true;
                     console.log(`Препятствия загружены: ${data.features.length} объектов`);
-                    setInfo('Препятствия загружены. Нажмите кнопку "Пространственные барьеры" для отображения');
+                    console.log('Препятствия загружены');
                 })
                 .catch((error) => {
                     console.error('Ошибка загрузки препятствий:', error);
@@ -433,6 +433,205 @@
                 .catch((error) => {
                     console.error('Ошибка загрузки границы области:', error);
                 });
+        }
+
+        function debounce(fn, timeout) {
+            let timer = null;
+            return function (...args) {
+                clearTimeout(timer);
+                timer = setTimeout(() => fn.apply(this, args), timeout);
+            };
+        }
+
+        // Загрузка дорог для отображения (не для разрезания сетки)
+        let highwayLayer = null;
+
+        function loadHighwayLayer() {
+            fetch('./highway.geojson')
+                .then(response => response.json())
+                .then(data => {
+                    highwayLayer = L.geoJSON(data, {
+                        style: {
+                            color: '#8B4513',  // Коричневый цвет
+                            weight: 3, // Толще
+                            opacity: 0.9 // Ярче
+                        },
+                        filter: () => true
+                    });
+                    // НЕ добавляем на карту здесь! Только создаём слой
+                    console.log('Дороги загружены, количество:', data.features.length);
+                })
+                .catch(err => console.error('Ошибка загрузки дорог:', err));
+        }
+
+        function initGridSystem() {
+            map.on('zoomend', onZoomEnd);
+        }
+
+        // Генерация адаптивной сетки (цельные ячейки, дороги поверх)
+        function generateAdaptiveGrid() {
+            if (!window.turf || !oblastGeo) {
+                console.warn('Turf или граница не загружены');
+                return Promise.resolve();
+            }
+
+            const zoom = map.getZoom();
+
+            let cellSizeKm;
+            if (zoom <= 11) cellSizeKm = 2.0;
+            else if (zoom <= 12) cellSizeKm = 1.2;
+            else if (zoom <= 13) cellSizeKm = 0.8;
+            else if (zoom <= 14) cellSizeKm = 0.5;
+            else if (zoom <= 15) cellSizeKm = 0.3;
+            else if (zoom <= 16) cellSizeKm = 0.15;
+            else cellSizeKm = 0.08;
+
+            const oblastPolygon = getOblastPolygon(oblastGeo);
+            if (!oblastPolygon) return Promise.resolve();
+
+            const bbox = window.turf.bbox(oblastPolygon);
+            let grid = window.turf.squareGrid(bbox, cellSizeKm, { units: 'kilometers' });
+
+            if (grid.features.length > 2000) {
+                cellSizeKm *= 1.5;
+                grid = window.turf.squareGrid(bbox, cellSizeKm, { units: 'kilometers' });
+            }
+
+            const clippedFeatures = [];
+            grid.features.forEach(cell => {
+                const clipped = window.turf.intersect(cell, oblastPolygon);
+                if (clipped) {
+                    clipped.properties = {
+                        zoom: zoom,
+                        area: window.turf.area(clipped),
+                        center: window.turf.centroid(clipped).geometry.coordinates
+                    };
+                    clippedFeatures.push(clipped);
+                }
+            });
+
+            if (clippedFeatures.length === 0) return Promise.resolve();
+
+            const gridFC = window.turf.featureCollection(clippedFeatures);
+
+            if (gridLayer && map.hasLayer(gridLayer)) {
+                map.removeLayer(gridLayer);
+            }
+
+            gridLayer = L.geoJSON(gridFC, {
+                style: {
+                    color: '#3169b8',
+                    weight: 0.8,
+                    opacity: 0.6,
+                    fillColor: '#3169b8',
+                    fillOpacity: 0.08
+                },
+                onEachFeature: (feature, layer) => {
+                    if (feature.properties) {
+                        const areaHa = (feature.properties.area / 10000).toFixed(1);
+                        layer.bindTooltip(`Ячейка ${areaHa} га`, { sticky: true });
+                    }
+                }
+            });
+
+            if (gridVisible) {
+                gridLayer.addTo(map);
+                addGridCircles();
+            }
+
+            gridLoaded = true;
+            setInfo(`Сетка: ${clippedFeatures.length} ячеек (${cellSizeKm} км, zoom ${zoom})`);
+
+            return Promise.resolve();
+        }
+
+        let gridDebounceTimer = null;
+
+        // Слой для красных кружков (центры ячеек сетки)
+        let gridCirclesLayer = null;
+
+        // Функция создания красных кружков в углах ячеек сетки 
+        function addGridCircles() {
+            // Удаляем старый слой если есть
+            if (gridCirclesLayer && map.hasLayer(gridCirclesLayer)) {
+                map.removeLayer(gridCirclesLayer);
+            }
+
+            if (!gridLayer || !gridVisible) return;
+
+            const features = getGridFeatures(gridLayer);
+            if (!features.length) return;
+
+            // Используем Set для уникальных координат (чтобы не дублировать кружки)
+            const uniquePoints = new Map(); // ключ "lat,lng" -> координаты
+
+            features.forEach(cell => {
+                if (!cell || !cell.geometry) return;
+
+                // Получаем все вершины полигона
+                let coords = [];
+
+                if (cell.geometry.type === 'Polygon') {
+                    // Внешнее кольцо полигона
+                    coords = cell.geometry.coordinates[0];
+                } else if (cell.geometry.type === 'MultiPolygon') {
+                    // Для MultiPolygon берём первый полигон
+                    coords = cell.geometry.coordinates[0][0];
+                }
+
+                // Добавляем каждую вершину в Set
+                coords.forEach(coord => {
+                    // coord = [lng, lat]
+                    const lng = coord[0];
+                    const lat = coord[1];
+                    const key = `${lat.toFixed(6)},${lng.toFixed(6)}`;
+
+                    if (!uniquePoints.has(key)) {
+                        uniquePoints.set(key, { lat, lng });
+                    }
+                });
+            });
+
+            // Создаём кружки для всех уникальных вершин
+            const circles = [];
+
+            uniquePoints.forEach(point => {
+                const circle = L.circleMarker([point.lat, point.lng], {
+                    radius: 4,
+                    color: '#ff0000',
+                    fillColor: '#ff0000',
+                    fillOpacity: 0.9,
+                    weight: 1,
+                    opacity: 0.9
+                });
+
+                // Добавляем всплывашку с координатами
+                circle.bindTooltip(`Узел сетки<br>${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`, {
+                    sticky: true,
+                    direction: 'top'
+                });
+
+                circles.push(circle);
+            });
+
+            gridCirclesLayer = L.layerGroup(circles);
+
+            if (gridVisible) {
+                gridCirclesLayer.addTo(map);
+            }
+
+            console.log(`Добавлено ${uniquePoints.size} красных кружков (узлы сетки)`);
+        }
+
+        function onZoomEnd() {
+            if (!gridVisible) return;
+
+            if (gridDebounceTimer) clearTimeout(gridDebounceTimer);
+            gridDebounceTimer = setTimeout(() => {
+                generateAdaptiveGrid().then(() => {
+                    addGridCircles();  // Пересоздаём кружки после обновления сетки
+                });
+            }, 200);
         }
 
         // Функция фильтрации маркеров по районам
@@ -719,76 +918,6 @@
             createNewMallMarker(e.latlng);
         }
 
-        // Функция генерации сетки анализа
-        function generateGrid() {
-            if (!window.turf || !window.turf.squareGrid) {
-                setInfo('Turf.js не доступен. Проверьте подключение https://unpkg.com/@turf/turf@6/turf.min.js');
-                console.error('turf.squareGrid is not available');
-                return;
-            }
-
-            let bbox;
-            if (oblastGeo && oblastGeo.features && oblastGeo.features.length > 0) {
-                bbox = window.turf.bbox(oblastGeo);
-            } else {
-                // Вычисляем bbox по shoppingCenters
-                const centers = window.shoppingCenters || [];
-                if (centers.length === 0) {
-                    setInfo('Нет данных для построения сетки');
-                    return;
-                }
-                const lngs = centers.map(c => c.lng);
-                const lats = centers.map(c => c.lat);
-                bbox = [Math.min(...lngs) - 0.05, Math.min(...lats) - 0.05, Math.max(...lngs) + 0.05, Math.max(...lats) + 0.05];
-            }
-
-            // Размер ячейки 1 км (оптимально для производительности)
-            const cellSize = 1; // в километрах
-
-            const grid = window.turf.squareGrid(bbox, cellSize, { units: 'kilometers' });
-
-            gridLayer = L.geoJSON(grid, {
-                style: {
-                    color: '#999',
-                    weight: 1,
-                    opacity: 0.1,
-                    fillOpacity: 0
-                }
-            });
-
-            // Создание точек по вершинам сетки
-            const pointsSet = new Set();
-            grid.features.forEach(feature => {
-                if (feature.geometry && feature.geometry.coordinates && feature.geometry.coordinates[0]) {
-                    const coords = feature.geometry.coordinates[0];
-                    coords.forEach(coord => {
-                        const lng = coord[0];
-                        const lat = coord[1];
-                        const key = lat + "," + lng;
-                        pointsSet.add(key);
-                    });
-                }
-            });
-
-            const pointMarkers = [];
-            pointsSet.forEach(key => {
-                const [lat, lng] = key.split(',').map(Number);
-                const marker = L.circleMarker([lat, lng], {
-                    radius: 2,           // размер сетки
-                    color: '#ff4444',    // можно оставить red или указать hex
-                    fillColor: '#ff4444',
-                    fillOpacity: 1.0,    // это цвет сеточного анализа
-                    weight: 0.5          // толщина обводки (чем меньше, тем тоньше)
-                });
-                pointMarkers.push(marker);
-            });
-
-            gridPointsLayer = L.layerGroup(pointMarkers);
-
-            gridLoaded = true;
-            console.log('Аналитическая сетка и точки сгенерированы');
-        }
-
         // Функция расчёта модели Хаффа для слоёв сетки
         function calculateHuffModel(gridLayer, shoppingCenters) {
             if (!window.turf || !window.turf.distance || !window.turf.centroid) {
@@ -871,37 +1000,31 @@
         }
 
         function getOblastPolygon(oblastGeo) {
-            if (!oblastGeo || !oblastGeo.features || !oblastGeo.features.length) return null;
+            if (!oblastGeo || !oblastGeo.features) return null;
 
-            const polygonFeature = oblastGeo.features.find(feature => feature.geometry && (feature.geometry.type === 'Polygon' || feature.geometry.type === 'MultiPolygon'));
+            // Ищем Polygon или MultiPolygon
+            const polygonFeature = oblastGeo.features.find(f =>
+                f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon')
+            );
+
             if (polygonFeature) return polygonFeature;
 
-            const lineFeature = oblastGeo.features.find(feature => feature.geometry && (feature.geometry.type === 'LineString' || feature.geometry.type === 'MultiLineString'));
-            if (!lineFeature) return null;
+            // Если только LineString (граница), конвертируем в полигон
+            const lineFeature = oblastGeo.features.find(f =>
+                f.geometry && f.geometry.type === 'LineString'
+            );
 
-            const coords = lineFeature.geometry.coordinates;
-            if (!coords || !coords.length) return null;
-
-            if (lineFeature.geometry.type === 'LineString') {
-                const ring = coords.slice();
-                const first = ring[0];
-                const last = ring[ring.length - 1];
-                if (first[0] !== last[0] || first[1] !== last[1]) {
-                    ring.push(first);
+            if (lineFeature) {
+                const coords = lineFeature.geometry.coordinates.slice();
+                // Замыкаем линию
+                if (coords[0][0] !== coords[coords.length - 1][0] ||
+                    coords[0][1] !== coords[coords.length - 1][1]) {
+                    coords.push(coords[0]);
                 }
-                return window.turf.polygon([ring]);
+                return window.turf.polygon([coords]);
             }
 
-            // MultiLineString: возьмём первую линию как внешний контур
-            const firstLine = coords[0];
-            if (!firstLine || !firstLine.length) return null;
-            const ring = firstLine.slice();
-            const first = ring[0];
-            const last = ring[ring.length - 1];
-            if (first[0] !== last[0] || first[1] !== last[1]) {
-                ring.push(first);
-            }
-            return window.turf.polygon([ring]);
+            return null;
         }
 
         function createCompetitionLayer(gridLayer, oblastGeo) {
@@ -959,61 +1082,69 @@
             return competitionLayer;
         }
 
-        // Функция переключения сетки анализа
+        // Функция переключения сетки анализа (с кружками)
         function toggleGrid() {
             const btn = document.getElementById('toggleGrid');
 
             if (!gridLoaded) {
-                setInfo('Генерация сетки анализа...');
-                generateGrid();
-                if (!gridLayer) {
-                    setInfo('Не удалось сгенерировать сетку');
-                    return;
-                }
+                setInfo('Генерация сетки...');
+                generateAdaptiveGrid().then(() => {
+                    if (gridLayer && !gridVisible) {
+                        gridLayer.addTo(map);
+                        addGridCircles();
+                        // Загружаем дороги ТОЛЬКО когда включаем сетку
+                        if (!highwayLayer) {
+                            loadHighwayLayer();
+                        } else {
+                            highwayLayer.addTo(map);
+                            highwayLayer.bringToFront();
+                        }
+                        gridVisible = true;
+                        btn.textContent = 'Аналитическая сетка (вкл)';
+                        btn.classList.add('is-on');
+                        setInfo('Аналитическая сетка включена');
+                    }
+                });
+                return;
             }
 
             if (gridVisible) {
-                // Скрываем сетку и точки
-                if (map.hasLayer(gridLayer)) {
+                if (gridLayer && map.hasLayer(gridLayer)) {
                     map.removeLayer(gridLayer);
                 }
-                if (map.hasLayer(gridPointsLayer)) {
-                    map.removeLayer(gridPointsLayer);
+                if (gridCirclesLayer && map.hasLayer(gridCirclesLayer)) {
+                    map.removeLayer(gridCirclesLayer);
+                }
+                // Скрываем дороги вместе с сеткой
+                if (highwayLayer && map.hasLayer(highwayLayer)) {
+                    map.removeLayer(highwayLayer);
                 }
                 gridVisible = false;
-                setInfo('Аналитическая сетка скрыта');
                 btn.textContent = 'Аналитическая сетка';
                 btn.classList.remove('is-on');
+                setInfo('Аналитическая сетка выключена');
             } else {
-                // Показываем сетку и точки
-                if (!map.hasLayer(gridLayer)) {
+                if (gridLayer && !map.hasLayer(gridLayer)) {
                     gridLayer.addTo(map);
                 }
-                if (!map.hasLayer(gridPointsLayer)) {
-                    gridPointsLayer.addTo(map);
+                addGridCircles();
+                // Показываем дороги вместе с сеткой
+                if (highwayLayer && !map.hasLayer(highwayLayer)) {
+                    highwayLayer.addTo(map);
+                    highwayLayer.bringToFront();
                 }
                 gridVisible = true;
-                setInfo('Аналитическая сетка отображена');
                 btn.textContent = 'Аналитическая сетка (вкл)';
                 btn.classList.add('is-on');
-            }
 
-            btn.setAttribute('aria-pressed', String(gridVisible));
+                generateAdaptiveGrid();
+                setInfo('Аналитическая сетка включена');
+            }
         }
 
-        function toggleCompetition() {
+        function runCompetitionCalculation() {
             const btn = document.getElementById('toggleCompetition');
 
-            if (!gridLoaded) {
-                setInfo('Генерация сетки анализа для расчёта конкуренции...');
-                generateGrid();
-                if (!gridLayer) {
-                    setInfo('Не удалось сгенерировать сетку');
-                    return;
-                }
-            }
-
-            // Получаем только видимые ТЦ
             const visibleMarkers = allMarkers.filter(marker => map.hasLayer(marker));
             if (visibleMarkers.length < 2) {
                 setInfo('Для расчёта конкуренции нужны минимум 2 видимых торговых центра. Выберите районы!');
@@ -1025,7 +1156,7 @@
                     Math.abs(sc.lat - marker.getLatLng().lat) < 0.0001 &&
                     Math.abs(sc.lng - marker.getLatLng().lng) < 0.0001
                 );
-            }).filter(sc => sc); // убираем undefined
+            }).filter(sc => sc);
 
             if (visibleShoppingCenters.length < 2) {
                 setInfo('Не удалось найти данные видимых ТЦ для расчёта конкуренции');
@@ -1034,7 +1165,6 @@
 
             calculateHuffModel(gridLayer, visibleShoppingCenters);
 
-            // Пересоздаём слой конкуренции каждый раз для актуальности
             if (competitionLayer && map.hasLayer(competitionLayer)) {
                 map.removeLayer(competitionLayer);
             }
@@ -1061,6 +1191,29 @@
                 btn.textContent = 'Интенсивность конкуренции (вкл)';
                 btn.classList.add('is-on');
             }
+
+            btn.setAttribute('aria-pressed', String(competitionVisible));
+        }
+
+        function toggleCompetition() {
+            const btn = document.getElementById('toggleCompetition');
+
+            if (!gridLoaded) {
+                setInfo('Генерация сетки анализа для расчёта конкуренции...');
+                generateAdaptiveGrid().then(() => {
+                    if (!gridLayer) {
+                        setInfo('Не удалось сгенерировать сетку');
+                        return;
+                    }
+                    runCompetitionCalculation();
+                }).catch(error => {
+                    console.error(error);
+                    setInfo('Ошибка при генерации сетки');
+                });
+                return;
+            }
+
+            runCompetitionCalculation();
 
             btn.setAttribute('aria-pressed', String(competitionVisible));
         }
@@ -1125,130 +1278,44 @@
             console.log('Маршрут очищен');
         }
 
-        // Данные популярных улиц и красивых мест в Волгограде
-        const volgograd_streets = [
-            { name: "Проспект им. В.И. Ленина", district: "Центральный", lat: 48.73, lng: 44.52 },
-            { name: "Проспект Маршала Жукова", district: "Дзержинский", lat: 48.74, lng: 44.50 },
-            { name: "Проспект Дорожников", district: "Дзержинский", lat: 48.76, lng: 44.51 },
-            { name: "Проспект Металлургов", district: "Краснооктябрьский", lat: 48.77, lng: 44.54 },
-            { name: "Университетский проспект", district: "Советский", lat: 48.65, lng: 44.43 },
-            { name: "Улица Курчатова", district: "Кировский", lat: 48.60, lng: 44.42 },
-            { name: "Бульвар 30 лет Победы", district: "Дзержинский", lat: 48.75, lng: 44.50 },
-            { name: "Рабоче-Крестьянская улица", district: "Ворошиловский", lat: 48.70, lng: 44.50 },
-            { name: "Краснознаменская улица", district: "Центральный", lat: 48.70, lng: 44.51 },
-            { name: "Улица имени Землячки", district: "Дзержинский", lat: 48.74, lng: 44.52 },
-            { name: "Улица 50 лет Октября", district: "Красноармейский", lat: 48.52, lng: 44.56 },
-            { name: "Хорошевское шоссе", district: "Тракторозаводский", lat: 48.80, lng: 44.60 },
-            { name: "Электролесовская улица", district: "Советский", lat: 48.65, lng: 44.44 },
-            { name: "площадь Павших Борцов", district: "Центральный", lat: 48.70, lng: 44.50 },
-            { name: "Астраханская улица", district: "Центральный", lat: 48.71, lng: 44.48 },
-            { name: "Пролетарская улица", district: "Центральный", lat: 48.70, lng: 44.49 },
-            { name: "Советская улица", district: "Советский", lat: 48.65, lng: 44.44 },
-            { name: "Комсомольская улица", district: "Кировский", lat: 48.62, lng: 44.43 },
-            { name: "Ополченская улица", district: "Тракторозаводский", lat: 48.80, lng: 44.60 },
-            { name: "Мира улица", district: "Центральный", lat: 48.71, lng: 44.50 },
-            { name: "площадь Ленина", district: "Центральный", lat: 48.72, lng: 44.52 },
-            { name: "Авиационная улица", district: "Дзержинский", lat: 48.74, lng: 44.51 },
-            { name: "Мира проспект", district: "Советский", lat: 48.64, lng: 44.43 },
-            { name: "Красного Урала улица", district: "Советский", lat: 48.66, lng: 44.42 },
-            { name: "Танкистов проспект", district: "Краснооктябрьский", lat: 48.76, lng: 44.55 },
-            { name: "Циолковского улица", district: "Советский", lat: 48.63, lng: 44.42 },
-            { name: "Чернышевского улица", district: "Советский", lat: 48.67, lng: 44.43 },
-            { name: "Киселева улица", district: "Центральный", lat: 48.71, lng: 44.49 },
-            { name: "Колхозная улица", district: "Кировский", lat: 48.60, lng: 44.41 },
-            { name: "Ленинский проспект", district: "Центральный", lat: 48.72, lng: 44.50 },
-            { name: "Невская улица", district: "Дзержинский", lat: 48.75, lng: 44.49 },
-            { name: "Рабочая улица", district: "Центральный", lat: 48.70, lng: 44.48 },
-            { name: "Саратовская улица", district: "Центральный", lat: 48.69, lng: 44.51 },
-            { name: "Советского Флота улица", district: "Краснооктябрьский", lat: 48.77, lng: 44.53 },
-            { name: "Столетова улица", district: "Кировский", lat: 48.61, lng: 44.42 },
-            { name: "Толбухина улица", district: "Тракторозаводский", lat: 48.79, lng: 44.59 },
-            { name: "Угодская улица", district: "Центральный", lat: 48.71, lng: 44.47 },
-            { name: "Рокоссовского 45", district: "Центральный", lat: 48.718811, lng: 44.505236 },
-            { name: "Фридриха Энгельса улица", district: "Советский", lat: 48.66, lng: 44.45 }
-        ];
+        // Функция обработки ввода адреса через Nominatim с JSONP
+        let jsonpCallbackId = 0;
 
-        // Функция обработки ввода адреса
         function handleAddressInput(query, type) {
-            if (query.length < 2) {
+            if (query.length < 3) {
                 hideSuggestions(type);
                 return;
             }
 
-            // Используем ТОЛЬКО локальный поиск (без внешних API)
-            const results = [];
+            const callbackName = `nominatim_callback_${Date.now()}_${jsonpCallbackId++}`;
+            const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=8&json_callback=${callbackName}`;
 
-            // 1. Ищем в локальных ТЦ
-            const localShops = searchLocalShops(query);
-            results.push(...localShops);
+            window[callbackName] = function (data) {
+                if (!data || !Array.isArray(data) || data.length === 0) {
+                    showSuggestions([], type);
+                } else {
+                    const results = data.map(item => ({
+                        display_name: item.display_name,
+                        lat: parseFloat(item.lat),
+                        lon: parseFloat(item.lon),
+                        type: item.type,
+                        class: item.class
+                    }));
+                    showSuggestions(results, type);
+                }
+                delete window[callbackName];
+                document.body.removeChild(script);
+            };
 
-            // 2. Ищем в локальных улицах
-            const localStreets = searchLocalStreets(query);
-            results.push(...localStreets);
-
-            // Показываем результаты (максимум 8)
-            showSuggestions(results.slice(0, 8), type);
-        }
-
-        // Функция локального поиска по ТЦ
-        function searchLocalShops(query) {
-            if (!window.shoppingCenters) return [];
-
-            const lowerQuery = query.toLowerCase().trim();
-            if (lowerQuery.length === 0) return [];
-
-            return window.shoppingCenters
-                .filter(sc => {
-                    const nameMatch = sc.name.toLowerCase().includes(lowerQuery);
-                    const addressMatch = sc.address.toLowerCase().includes(lowerQuery);
-                    const districtMatch = sc.district.toLowerCase().includes(lowerQuery);
-
-                    return nameMatch || addressMatch || districtMatch;
-                })
-                .sort((a, b) => {
-                    // Приоритет: точное вхождение в имя > все остальное
-                    const aNameStart = a.name.toLowerCase().startsWith(lowerQuery);
-                    const bNameStart = b.name.toLowerCase().startsWith(lowerQuery);
-                    if (aNameStart && !bNameStart) return -1;
-                    if (!aNameStart && bNameStart) return 1;
-                    return 0;
-                })
-                .slice(0, 5)
-                .map(sc => ({
-                    display_name: `${sc.name}, ${sc.address}`,
-                    lat: sc.lat,
-                    lon: sc.lng,
-                    type: 'shopping_center'
-                }));
-        }
-
-        // Функция локального поиска по улицам
-        function searchLocalStreets(query) {
-            const lowerQuery = query.toLowerCase().trim();
-            if (lowerQuery.length === 0) return [];
-
-            return volgograd_streets
-                .filter(street => {
-                    const nameMatch = street.name.toLowerCase().includes(lowerQuery);
-                    const districtMatch = street.district.toLowerCase().includes(lowerQuery);
-
-                    return nameMatch || districtMatch;
-                })
-                .sort((a, b) => {
-                    // Приоритет: точное вхождение в имя > все остальное
-                    const aNameStart = a.name.toLowerCase().startsWith(lowerQuery);
-                    const bNameStart = b.name.toLowerCase().startsWith(lowerQuery);
-                    if (aNameStart && !bNameStart) return -1;
-                    if (!aNameStart && bNameStart) return 1;
-                    return 0;
-                })
-                .slice(0, 5)
-                .map(street => ({
-                    display_name: `${street.name}, ${street.district} район, Волгоград`,
-                    lat: street.lat,
-                    lon: street.lng,
-                    type: 'street'
-                }));
+            const script = document.createElement('script');
+            script.src = url;
+            script.onerror = function () {
+                console.error('JSONP запрос не удался');
+                showSuggestions([], type);
+                delete window[callbackName];
+                document.body.removeChild(script);
+            };
+            document.body.appendChild(script);
         }
 
         // Функция геокодирования (НЕ используется - локальный поиск достаточно)
@@ -1269,7 +1336,7 @@
             if (!results || results.length === 0) {
                 const div = document.createElement('div');
                 div.className = 'ac-item';
-                div.textContent = '💡 Введите больше символов или название улицы Волгограда';
+                div.textContent = '🔍 Ничего не найдено. Попробуйте изменить запрос.';
                 div.style.color = '#666';
                 div.style.pointerEvents = 'none';
                 div.style.fontStyle = 'italic';
@@ -1286,15 +1353,20 @@
                 const div = document.createElement('div');
                 div.className = 'ac-item';
 
-                // Добавляем иконку в зависимости от типа
+                // Иконка в зависимости от типа
                 let icon = '📍';
-                if (result.type === 'shopping_center') {
-                    icon = '🏬';
-                } else if (result.type === 'street') {
-                    icon = '🛣️';
+                if (result.type === 'shop' || result.class === 'shop') icon = '🏪';
+                else if (result.type === 'amenity') icon = '🏛️';
+                else if (result.type === 'highway') icon = '🛣️';
+                else if (result.type === 'building') icon = '🏢';
+
+                // Сокращаем слишком длинные названия
+                let displayName = result.display_name;
+                if (displayName.length > 80) {
+                    displayName = displayName.substring(0, 77) + '...';
                 }
 
-                div.innerHTML = `<span>${icon}</span> <span>${result.display_name}</span>`;
+                div.innerHTML = `<span>${icon}</span> <span style="margin-left: 8px;">${displayName}</span>`;
                 div.style.cursor = 'pointer';
                 div.addEventListener('click', () => selectSuggestion(result, type));
                 div.addEventListener('mouseover', () => div.style.background = '#f0f0f0');
@@ -1343,8 +1415,6 @@
                 }, 100);
             }
         }
-
-        // Замените функцию buildRoute на эту исправленную версию:
 
         // Функция построения маршрута через OpenRouteService
         function buildRoute(fromCoords, toCoords) {

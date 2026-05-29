@@ -325,11 +325,12 @@
 
 /* Районы уместимы в панель: двухколоночная сетка, не прокручивается */
 #districtCheckboxes {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    display: flex;
+    flex-direction: column;
     gap: 8px;
 }
 
+/* Кнопки с районами */
 .small-btn {
     background: white;
     border: 1px solid #E0E0E0;
